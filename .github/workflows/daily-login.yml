@@ -1,0 +1,79 @@
+# GitHub Action: 每天零点自动登录
+# 用于保持 Lunes Host 会话活跃
+
+name: Daily Login
+
+on:
+  # 每天 UTC 16:00 (北京时间 00:00) 执行
+  schedule:
+    - cron: '0 16 * * *'
+  
+  # 支持手动触发
+  workflow_dispatch:
+    inputs:
+      debug:
+        description: 'Enable debug mode'
+        required: false
+        default: 'false'
+
+# 设置环境变量
+env:
+  LOGIN_URL: ${{ secrets.LOGIN_URL }}
+  LOGIN_API_URL: ${{ secrets.LOGIN_API_URL }}
+  DASHBOARD_URL: ${{ secrets.DASHBOARD_URL }}
+  KEEP_ALIVE_URL: ${{ secrets.KEEP_ALIVE_URL }}
+  LOGIN_EMAIL: ${{ secrets.LOGIN_EMAIL }}
+  LOGIN_PASSWORD: ${{ secrets.LOGIN_PASSWORD }}
+  CF_CLEARANCE: ${{ secrets.CF_CLEARANCE }}
+  SESSION_COOKIE: ${{ secrets.SESSION_COOKIE }}
+  TURNSTILE_TOKEN: ${{ secrets.TURNSTILE_TOKEN }}
+  DEBUG: ${{ github.event.inputs.debug || 'false' }}
+
+jobs:
+  login:
+    runs-on: ubuntu-latest
+    
+    steps:
+      # 1. 检出代码
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      # 2. 安装 Node.js
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+          cache: 'npm'
+
+      # 3. 安装依赖
+      - name: Install dependencies
+        run: npm install
+
+      # 4. 执行登录脚本
+      - name: Run login script
+        id: login
+        run: |
+          echo "🚀 开始执行自动登录..."
+          node login.js
+        continue-on-error: true
+
+      # 5. 输出结果
+      - name: Check login result
+        run: |
+          if [ $? -eq 0 ]; then
+            echo "✅ 自动登录成功!"
+          else
+            echo "❌ 自动登录失败，请检查配置"
+            exit 1
+          fi
+
+      # 6. 记录执行日志 (可选)
+      - name: Upload logs
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: login-logs
+          path: |
+            login*.log
+          retention-days: 7
+          if-no-files-found: ignore

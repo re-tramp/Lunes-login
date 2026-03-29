@@ -1,0 +1,22 @@
+{
+  "name": "lunes-login",
+  "version": "1.0.0",
+  "description": "Lunes Host 自动登录脚本 - GitHub Action",
+  "main": "login.js",
+  "scripts": {
+    "start": "node login.js",
+    "login": "node login.js",
+    "test": "echo \"No tests yet\""
+  },
+  "keywords": [
+    "login",
+    "automation",
+    "github-action",
+    "lunes"
+  ],
+  "author": "",
+  "license": "MIT",
+  "engines": {
+    "node": ">=18.0.0"
+  }
+}
