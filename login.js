@@ -225,7 +225,7 @@ async function login() {
     log.debug('登录响应状态:', loginResponse.statusCode);
 
     if (loginResponse.statusCode >= 200 && loginResponse.statusCode < 300) {
-      log.success('✅ 登录成功!');
+      log.success('✅ 登录成功! 状态：', loginResponse.statusCode);
     } else if (loginResponse.statusCode === 401) {
       log.error('❌ 用户名或密码错误');
       throw new Error('Authentication failed');
