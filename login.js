@@ -1,49 +1,25 @@
-/**
- *Lunes Host 自动登录脚本
- *用于 GitHub Action 每天零点自动登录
- * 
- *基于 HAR 文件分析:
- *- 目标网站: https://betadash.lunes.host
- *- 使用 Cloudflare 保护 (cf_clearance)
- *- Session 管理
- */
-
 const https = require('https');
 const http = require('http');
 const { URL } = require('url');
 
-// ============== 配置区域 (请修改以下配置) ==============
 const CONFIG = {
-  // 登录页面 URL
   loginUrl: process.env.LOGIN_URL || 'https://betadash.lunes.host/login',
-  
-  // 登录 API 端点 (POST 到 /login)
   loginApiUrl: process.env.LOGIN_API_URL || 'https://betadash.lunes.host/login',
-  
-  // 登录后跳转的页面
   dashboardUrl: process.env.DASHBOARD_URL || 'https://betadash.lunes.host/dashboard',
-  
-  // 登录后要访问的页面 (用于保持会话)
   keepAliveUrl: process.env.KEEP_ALIVE_URL || 'https://betadash.lunes.host/cdn-cgi/rum',
-  
-  // 邮箱 (使用环境变量或在 GitHub Secrets 中配置)
   email: process.env.LOGIN_EMAIL || '',
-  
-  // 密码 (使用环境变量或在 GitHub Secrets 中配置)
   password: process.env.LOGIN_PASSWORD || '',
-  
-  // 请求超时 (毫秒)
   timeout: 30000,
-  
-  // 是否启用调试日志
   debug: process.env.DEBUG === 'true',
-  
-  // Cloudflare cookies (如果需要预填充)
   cfClearance: process.env.CF_CLEARANCE || '',
-  sessionCookie: process.env.SESSION_COOKIE || ''
+  sessionCookie: process.env.SESSION_COOKIE || '',
+  telegram: {
+    enabled: !!(process.env.TG_BOT_TOKEN && process.env.TG_CHAT_ID),
+    botToken: process.env.TG_BOT_TOKEN || '',
+    chatId: process.env.TG_CHAT_ID || ''
+  }
 };
 
-// 日志函数
 const log = {
   info: (...args) => console.log(`[${new Date().toISOString()}] ℹ`, ...args),
   success: (...args) => console.log(`[${new Date().toISOString()}] ✅`, ...args),
@@ -54,9 +30,55 @@ const log = {
   }
 };
 
-/**
- * 发起 HTTP/HTTPS 请求
- */
+async function sendTelegramNotification(message, isError = false) {
+  if (!CONFIG.telegram.enabled) {
+    log.debug('Telegram 通知未启用');
+    return;
+  }
+
+  const emoji = isError ? '🔴' : '🟢';
+  const text = `*Lunes Login ${isError ? 'Failed' : 'Success'}* ${emoji}\n\n` +
+    `\`${message}\`\n\n` +
+    `⏰ Time: ${new Date().toLocaleString('zh-CN', { timeZone: 'Asia/Shanghai' })}`;
+
+  const postData = JSON.stringify({
+    chat_id: CONFIG.telegram.chatId,
+    text: text,
+    parse_mode: 'Markdown'
+  });
+
+  return new Promise((resolve) => {
+    const req = https.request(`https://api.telegram.org/bot${CONFIG.telegram.botToken}/sendMessage`, {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        'Content-Length': Buffer.byteLength(postData)
+      }
+    }, (res) => {
+      const chunks = [];
+      res.on('data', chunk => chunks.push(chunk));
+      res.on('end', () => {
+        const body = Buffer.concat(chunks).toString();
+        if (res.statusCode === 200) {
+          log.info('📱 Telegram 通知已发送');
+          resolve(true);
+        } else {
+          log.warn('⚠️ Telegram 通知失败:', body);
+          resolve(false);
+        }
+      });
+    });
+    
+    req.on('error', (err) => {
+      log.warn('⚠️ Telegram 请求错误:', err.message);
+      resolve(false);
+    });
+    
+    req.write(postData);
+    req.end();
+  });
+}
+
 function request(url, options = {}) {
   return new Promise((resolve, reject) => {
     const parsedUrl = new URL(url);
@@ -90,7 +112,6 @@ function request(url, options = {}) {
     }
 
     const req = client.request(url, requestOptions, (res) => {
-      // 收集响应数据
       const chunks = [];
       
       res.on('data', (chunk) => {
@@ -116,7 +137,6 @@ function request(url, options = {}) {
       reject(new Error('Request timeout'));
     });
 
-    // 写入请求体
     if (options.body) {
       req.write(options.body);
     }
@@ -125,9 +145,6 @@ function request(url, options = {}) {
   });
 }
 
-/**
- * 解析 Set-Cookie 头
- */
 function parseCookies(setCookieHeaders) {
   if (!setCookieHeaders || !Array.isArray(setCookieHeaders)) {
     return {};
@@ -145,25 +162,18 @@ function parseCookies(setCookieHeaders) {
   return cookies;
 }
 
-/**
- * 构建 Cookie 字符串
- */
 function buildCookieString(cookies) {
   return Object.entries(cookies)
     .map(([name, value]) => `${name}=${value}`)
     .join('; ');
 }
 
-/**
- * 执行登录
- */
 async function login() {
   log.info('🚀 开始登录流程...');
   log.info(`目标网站: ${CONFIG.loginUrl}`);
 
   let cookies = {};
 
-  // 如果有预填充的 Cloudflare cookie
   if (CONFIG.cfClearance) {
     cookies['cf_clearance'] = CONFIG.cfClearance;
     log.info('使用预填充的 cf_clearance cookie');
@@ -175,7 +185,6 @@ async function login() {
   }
 
   try {
-    // Step 1: 访问登录页面获取初始 cookie
     log.info('📋 步骤 1: 访问登录页面...');
     const loginPage = await request(CONFIG.loginUrl, {
       method: 'GET',
@@ -184,18 +193,15 @@ async function login() {
       }
     });
 
-    // 合并新的 cookies
     cookies = { ...cookies, ...loginPage.cookies };
     log.debug('登录页面状态:', loginPage.statusCode);
 
-    // 检查是否被 Cloudflare 拦截
     if (loginPage.statusCode === 403 || loginPage.body.includes('Cloudflare')) {
       log.error('🚫 检测到 Cloudflare 挑战，需要手动处理 cf_clearance');
       log.info('请在本地浏览器完成验证后，获取 cf_clearance cookie 并设置为环境变量');
       throw new Error('Cloudflare protection active');
     }
 
-    // Step 2: 发送登录请求
     log.info('🔐 步骤 2: 提交登录表单...');
     
     const loginData = new URLSearchParams({
@@ -215,11 +221,9 @@ async function login() {
       body: loginData
     });
 
-    // 合并登录后的 cookies
     cookies = { ...cookies, ...loginResponse.cookies };
     log.debug('登录响应状态:', loginResponse.statusCode);
 
-    // 检查登录结果
     if (loginResponse.statusCode >= 200 && loginResponse.statusCode < 300) {
       log.success('✅ 登录成功!');
     } else if (loginResponse.statusCode === 401) {
@@ -229,7 +233,6 @@ async function login() {
       log.warn('⚠️ 登录响应状态:', loginResponse.statusCode);
     }
 
-    // Step 3: 访问需要认证的页面验证登录
     log.info('✅ 步骤 3: 验证登录状态...');
     const verifyResponse = await request(CONFIG.keepAliveUrl, {
       method: 'POST',
@@ -252,7 +255,6 @@ async function login() {
       log.warn('⚠️ 验证响应状态:', verifyResponse.statusCode);
     }
 
-    // 输出最终 cookies (可用于调试)
     log.debug('最终 cookies:', JSON.stringify(cookies, null, 2));
 
     return {
@@ -271,16 +273,12 @@ async function login() {
   }
 }
 
-/**
- * 主函数
- */
 async function main() {
   log.info('='.repeat(50));
   log.info('Lunes Host 自动登录脚本');
   log.info('执行时间:', new Date().toISOString());
   log.info('='.repeat(50));
 
-  // 检查必要配置
   if (!CONFIG.email || !CONFIG.password) {
     log.error('❌ 请配置 LOGIN_EMAIL 和 LOGIN_PASSWORD 环境变量');
     log.info('设置环境变量命令:');
@@ -292,6 +290,12 @@ async function main() {
   const result = await login();
 
   if (result.success) {
+    await sendTelegramNotification('✅ 登录成功! 会话已保持', false);
+  } else {
+    await sendTelegramNotification(`❌ 登录失败: ${result.message}`, true);
+  }
+
+  if (result.success) {
     log.success('🎉 登录流程完成!');
     process.exit(0);
   } else {
@@ -300,10 +304,8 @@ async function main() {
   }
 }
 
-// 导出模块 (用于测试或在其他脚本中调用)
 module.exports = { login, CONFIG };
 
-// 直接运行
 if (require.main === module) {
   main().catch(error => {
     log.error('未捕获的错误:', error);
